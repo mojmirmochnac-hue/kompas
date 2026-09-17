@@ -20,7 +20,9 @@ export async function owner(req?:Request){
     const origin=req.headers.get('origin');
     if(origin&&origin!==new URL(req.url).origin)throw new Error('Neplatný pôvod požiadavky.');
   }
-  return 'primary';
+  const session=req?.headers.get('cookie')?.match(/(?:^|;\s*)kompas_session=([a-f0-9]{32})/)?.[1];
+  if(!session)throw new Error('Reláciu sa nepodarilo načítať. Obnov stránku.');
+  return session;
 }
 export function json(data:any,status=200){return Response.json(data,{status,headers:{'Cache-Control':'no-store'}})}
 export async function rows(o:string){
