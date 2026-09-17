@@ -1,0 +1,3 @@
+# Kompas
+
+Inicializácia projektu.
