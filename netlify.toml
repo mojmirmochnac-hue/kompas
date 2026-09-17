@@ -6,6 +6,9 @@
   NODE_VERSION = "22"
   PNPM_VERSION = "11.25.0"
 
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
 [[headers]]
   for = "/*"
   [headers.values]

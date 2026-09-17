@@ -16,12 +16,12 @@
   "dependencies": {
     "@base-ui/react": "^1.7.0",
     "@hookform/resolvers": "^5.7.1",
+    "@netlify/blobs": "^11.0.3",
     "@shadcn/react": "^0.3.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "cmdk": "^1.1.1",
     "date-fns": "^4.4.0",
-    "@netlify/blobs": "^11.0.3",
     "embla-carousel-react": "^8.6.0",
     "input-otp": "^1.4.2",
     "lucide-react": "^1.31.0",
@@ -40,6 +40,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@netlify/plugin-nextjs": "5.15.13",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
