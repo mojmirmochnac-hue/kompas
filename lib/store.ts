@@ -35,6 +35,20 @@ function environmentValue(name:string){
   return process.env[name];
 }
 
+function normalizedOrigin(value:string|undefined|null){
+  if(!value)return null;
+  try{return new URL(value).origin}catch{return null}
+}
+
+export function publicOrigin(req:Request){
+  const configured=normalizedOrigin(environmentValue('KOMPAS_PUBLIC_ORIGIN'))||normalizedOrigin(environmentValue('URL'));
+  if(configured)return configured;
+  const host=(req.headers.get('x-forwarded-host')||req.headers.get('host')||'').split(',')[0].trim();
+  const forwardedProto=(req.headers.get('x-forwarded-proto')||'').split(',')[0].trim();
+  if(host)return normalizedOrigin(`${forwardedProto||(/^localhost(?::|$)/.test(host)?'http':'https')}://${host}`)||new URL(req.url).origin;
+  return new URL(req.url).origin;
+}
+
 function migrationCodeMatches(value:string){
   const expected=environmentValue('KOMPAS_MIGRATION_CODE');
   if(!expected)return false;
@@ -77,8 +91,13 @@ async function findImportedLegacyOwner(){
 
 export async function owner(req?:Request){
   if(req&&req.method!=='GET'){
-    const origin=req.headers.get('origin');
-    if(!origin||origin!==new URL(req.url).origin)throw new ApiError('Neplatný pôvod požiadavky.',403);
+    const origin=normalizedOrigin(req.headers.get('origin'));
+    const requestOrigin=normalizedOrigin(req.url);
+    const forwardedHost=(req.headers.get('x-forwarded-host')||req.headers.get('host')||'').split(',')[0].trim();
+    const forwardedProto=(req.headers.get('x-forwarded-proto')||'').split(',')[0].trim();
+    const forwardedOrigin=forwardedHost?normalizedOrigin(`${forwardedProto||(/^localhost(?::|$)/.test(forwardedHost)?'http':'https')}://${forwardedHost}`):null;
+    const allowed=new Set([publicOrigin(req),requestOrigin,forwardedOrigin].filter(Boolean));
+    if(!origin||!allowed.has(origin))throw new ApiError('Neplatný pôvod požiadavky.',403);
   }
   const user=await getUser();
   if(!user)throw new ApiError('Prihlásenie vypršalo. Prihlás sa znova.',401);
