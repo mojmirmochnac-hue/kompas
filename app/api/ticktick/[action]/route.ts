@@ -1,13 +1,7 @@
-import {errorStatus,json,owner,readConfig,saveConfig} from '@/lib/store';
+import {errorStatus,json,owner,publicOrigin,readConfig,saveConfig} from '@/lib/store';
 import {syncTicktick,ticktickProjects,ticktickProjectsWithToken} from '@/lib/ticktick';
 
 export const runtime='nodejs';
-
-function publicOrigin(req:Request){
-  const url=new URL(req.url),host=req.headers.get('x-forwarded-host')||url.host;
-  const proto=req.headers.get('x-forwarded-proto')||url.protocol.replace(':','');
-  return `${proto}://${host}`;
-}
 
 function publicProject(project:any){
   return {id:String(project.id),name:String(project.name||'Bez názvu'),permission:String(project.permission||'write')};
