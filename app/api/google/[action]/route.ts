@@ -1,12 +1,7 @@
-import {owner,json,readConfig,saveConfig,rows,readRecord,writeRecord,errorStatus} from '@/lib/store';
+import {owner,json,publicOrigin,readConfig,saveConfig,rows,readRecord,writeRecord,errorStatus} from '@/lib/store';
 import {google,scopes,sync} from '@/lib/google';
 export const runtime='nodejs';
 
-function publicOrigin(req:Request){
-  const u=new URL(req.url),host=req.headers.get('x-forwarded-host')||u.host;
-  const proto=req.headers.get('x-forwarded-proto')||u.protocol.replace(':','');
-  return `${proto}://${host}`;
-}
 export async function GET(req:Request,{params}:any){try{
   const {action}=await params,o=await owner(req),c=await readConfig(o);
   const origin=publicOrigin(req),callback=origin+'/api/google/callback';
