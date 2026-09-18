@@ -1,6 +1,6 @@
-import {owner,json,rows,readRecord,writeRecord} from '@/lib/store';
+import {owner,json,rows,readRecord,writeRecord,errorStatus} from '@/lib/store';
 export const runtime='nodejs';
-export async function GET(req:Request){try{return json({records:await rows(await owner(req))})}catch(e){return json({error:(e as Error).message},503)}}
+export async function GET(req:Request){try{return json({records:await rows(await owner(req))})}catch(e){return json({error:(e as Error).message},errorStatus(e,503))}}
 export async function POST(req:Request){try{
   const o=await owner(req);const b:any=await req.json();
   if(!b.id||typeof b.id!=='string'||b.id.length>100||!['task','role','goal','compass','journal','review','value'].includes(b.kind))return json({error:'Neplatný záznam.'},400);
@@ -22,4 +22,4 @@ export async function POST(req:Request){try{
   }else delete data.gcal;
   const record={...data,id,kind,revision:revision+1};
   await writeRecord(o,record);return json({record});
-}catch(e){console.error('Data save failed');return json({error:(e as Error).message},500)}}
+}catch(e){console.error('Data save failed');return json({error:(e as Error).message},errorStatus(e))}}

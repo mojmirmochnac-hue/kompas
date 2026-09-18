@@ -1,4 +1,4 @@
-import {owner,json,readConfig,saveConfig,rows,readRecord,writeRecord} from '@/lib/store';
+import {owner,json,readConfig,saveConfig,rows,readRecord,writeRecord,errorStatus} from '@/lib/store';
 import {google,scopes,sync} from '@/lib/google';
 export const runtime='nodejs';
 
@@ -29,7 +29,7 @@ export async function GET(req:Request,{params}:any){try{
     return Response.redirect(origin+'/nastavenia?google=connected',303);
   }
   return json({error:'Neznáma operácia.'},404);
-}catch(e){return json({error:(e as Error).message},400)}}
+}catch(e){return json({error:(e as Error).message},errorStatus(e,400))}}
 
 export async function POST(req:Request,{params}:any){try{
   const {action}=await params,o=await owner(req),b:any=await req.json();let c=await readConfig(o);
@@ -69,4 +69,4 @@ export async function POST(req:Request,{params}:any){try{
     return json(await sync(o,b.from,b.to));
   }
   return json({error:'Neznáma operácia.'},404);
-}catch(e){return json({error:(e as Error).message},400)}}
+}catch(e){return json({error:(e as Error).message},errorStatus(e,400))}}
