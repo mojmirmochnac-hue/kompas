@@ -5,6 +5,7 @@ export async function POST(req:Request){try{
   const o=await owner(req);const b:any=await req.json();
   if(!b.id||typeof b.id!=='string'||b.id.length>100||!['task','role','goal','compass','journal','review','value'].includes(b.kind))return json({error:'Neplatný záznam.'},400);
   const {id,kind,revision=0,...data}=b;
+  delete data.ticktick;delete data.ticktickDirty;delete data.ticktickMessage;
   if(JSON.stringify(data).length>60000)return json({error:'Záznam je príliš veľký.'},400);
   if(['task','role','goal','value'].includes(kind)&&(!data.title?.trim()||data.title.length>500))return json({error:'Vyplň názov (najviac 500 znakov).'},400);
   if(kind==='task'){
@@ -19,7 +20,17 @@ export async function POST(req:Request){try{
     const {id:_id,kind:_kind,revision:_revision,...oldData}=old as any;
     if(oldData.gcal)data.gcal=oldData.gcal;else delete data.gcal;
     if(kind==='task'&&oldData.sync&&(oldData.date!==data.date||oldData.time!==data.time||oldData.duration!==data.duration||oldData.title!==data.title||oldData.notes!==data.notes||oldData.deleted!==data.deleted))data.dirty=true;
-  }else delete data.gcal;
+    if(kind==='task'){
+      if(oldData.ticktick)data.ticktick=oldData.ticktick;
+      if(oldData.ticktickMessage)data.ticktickMessage=oldData.ticktickMessage;
+      const shared=['title','notes','date','time','duration','priority','done','deleted'];
+      const changed=shared.some(field=>oldData[field]!==data[field]);
+      data.ticktickDirty=changed||!!oldData.ticktickDirty;
+    }
+  }else{
+    delete data.gcal;
+    if(kind==='task')data.ticktickDirty=true;
+  }
   const record={...data,id,kind,revision:revision+1};
   await writeRecord(o,record);return json({record});
 }catch(e){console.error('Data save failed');return json({error:(e as Error).message},errorStatus(e))}}

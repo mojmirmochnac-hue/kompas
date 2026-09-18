@@ -56,7 +56,9 @@ export async function POST(req:Request,{params}:any){try{
   }
   if(action==='disconnect'){
     if(c.refresh_token){const r=await fetch('https://oauth2.googleapis.com/revoke',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({token:c.refresh_token})});if(!r.ok&&r.status!==400)throw new Error('Google zatiaľ nepotvrdil odpojenie. Skús to znova.')}
-    await saveConfig(o,{clientId:c.clientId,clientSecret:c.clientSecret,calendarId:c.calendarId});return json({ok:true});
+    const next={...c,clientId:c.clientId,clientSecret:c.clientSecret,calendarId:c.calendarId};
+    delete next.access_token;delete next.refresh_token;delete next.expiry;delete next.readCalendars;delete next.state;delete next.expires;delete next.verifier;delete next.lastSync;
+    await saveConfig(o,next);return json({ok:true});
   }
   if(action==='resolve'){
     const t=await readRecord(o,b.id);

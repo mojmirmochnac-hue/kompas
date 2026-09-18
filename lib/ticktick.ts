@@ -1,0 +1,295 @@
+import {ApiError,acquireSyncLock,readConfig,releaseSyncLock,rows,saveConfig,writeRecord} from './store';
+
+type TickTask={
+  id:string;
+  projectId?:string;
+  title?:string;
+  content?:string;
+  desc?:string;
+  isAllDay?:boolean;
+  startDate?:string;
+  dueDate?:string;
+  timeZone?:string;
+  priority?:number;
+  status?:number;
+  completedTime?:string;
+  repeatFlag?:string;
+  reminders?:string[];
+  tags?:string[];
+  etag?:string;
+};
+
+type TickProject={id:string;name:string;permission?:string;closed?:boolean};
+type KompasRecord={id:string;kind:string;revision:number;[key:string]:any};
+
+const apiBase='https://api.ticktick.com/open/v1';
+const bratislava='Europe/Bratislava';
+
+async function requestWithToken(token:string,path:string,options:RequestInit={}){
+  const response=await fetch(apiBase+path,{
+    ...options,
+    headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...options.headers},
+  });
+  const text=await response.text();
+  let body:any=null;
+  if(text){try{body=JSON.parse(text)}catch{body=text}}
+  if(!response.ok){
+    if(response.status===401||response.status===403)throw new ApiError('TickTick prístup nie je platný. Vytvor nový osobný API token.',401);
+    throw new ApiError(`TickTick požiadavka zlyhala (${response.status}).`,502);
+  }
+  return body;
+}
+
+async function tokenFor(owner:string){
+  const config=await readConfig(owner);
+  if(!config.ticktickToken)throw new ApiError('Najprv pripoj TickTick v nastaveniach.',400);
+  return String(config.ticktickToken);
+}
+
+export async function ticktickProjectsWithToken(token:string){
+  const projects=await requestWithToken(token,'/project') as TickProject[];
+  return (Array.isArray(projects)?projects:[]).filter(project=>!project.closed);
+}
+
+export async function ticktickProjects(owner:string){
+  return ticktickProjectsWithToken(await tokenFor(owner));
+}
+
+export async function validateTicktickToken(token:string){
+  return ticktickProjectsWithToken(token);
+}
+
+function normalize(value:unknown){
+  return String(value||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('sk-SK').replace(/[^a-z0-9]+/g,' ').trim();
+}
+
+function localParts(iso:string|undefined,allDay=false){
+  if(!iso)return {date:'',time:''};
+  const instant=new Date(iso);
+  if(Number.isNaN(instant.valueOf()))return {date:'',time:''};
+  const parts=new Intl.DateTimeFormat('sv-SE',{timeZone:bratislava,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(instant);
+  const value=(type:string)=>parts.find(part=>part.type===type)?.value||'';
+  return {date:`${value('year')}-${value('month')}-${value('day')}`,time:allDay?'':`${value('hour')}:${value('minute')}`};
+}
+
+function zonedInstant(date:string,time:string){
+  const [year,month,day]=date.split('-').map(Number),[hour,minute]=time.split(':').map(Number);
+  const guess=Date.UTC(year,month-1,day,hour,minute);
+  const parts=new Intl.DateTimeFormat('en-CA',{timeZone:bratislava,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(new Date(guess));
+  const value=(type:string)=>Number(parts.find(part=>part.type===type)?.value||0);
+  const displayedAsUtc=Date.UTC(value('year'),value('month')-1,value('day'),value('hour'),value('minute'),value('second'));
+  return new Date(guess-(displayedAsUtc-guess)).toISOString().replace(/\.\d{3}Z$/,'+0000');
+}
+
+function priorityFromTicktick(priority=0){return priority>=5?'A':priority===1?'C':'B'}
+function priorityToTicktick(priority='B'){return priority==='A'?5:priority==='C'?1:3}
+
+function remoteFields(task:TickTask){
+  const start=localParts(task.startDate||task.dueDate,!!task.isAllDay);
+  const startMs=task.startDate?Date.parse(task.startDate):NaN,dueMs=task.dueDate?Date.parse(task.dueDate):NaN;
+  const duration=Number.isFinite(startMs)&&Number.isFinite(dueMs)&&dueMs>startMs?Math.max(5,Math.round((dueMs-startMs)/60000)):60;
+  return {
+    title:String(task.title||'Bez názvu'),
+    notes:String(task.content||task.desc||''),
+    date:start.date,
+    time:start.time,
+    duration,
+    priority:priorityFromTicktick(task.priority),
+    done:task.status===2||!!task.completedTime,
+  };
+}
+
+function matchKey(title:string,date:string,time:string){return `${normalize(title)}|${date||''}|${time||''}`}
+function titleKey(title:string){return normalize(title)}
+
+function roleForTask(task:TickTask,roles:KompasRecord[]){
+  const tags=(task.tags||[]).map(normalize).filter(Boolean);
+  if(!tags.length)return '';
+  const aliases:Record<string,string[]>={
+    otec:['otec','rodic'],manzel:['manzel'],krestan:['krestan'],podnikatel:['podnikatel'],
+    'vlastna obnova':['vlastna obnova','ostrenie pily'],'brat a syn':['brat','syn','brat syn'],
+    'zamestnanec lider':['zamestnanec','lider','praca'],
+  };
+  return roles.find(role=>{
+    const name=normalize(role.title),candidates=[name,...(aliases[name]||[])];
+    return tags.some(tag=>candidates.some(candidate=>tag===candidate||name.includes(tag)||tag.includes(name)));
+  })?.id||'';
+}
+
+function remoteVersion(task:TickTask){
+  return task.etag||JSON.stringify({
+    projectId:task.projectId||'',
+    ...remoteFields(task),
+    repeatFlag:task.repeatFlag||'',
+  });
+}
+
+function mergedFromRemote(local:KompasRecord,remote:TickTask,roles:KompasRecord[]){
+  const remoteData=remoteFields(remote);
+  return {
+    ...local,
+    ...remoteData,
+    roleId:local.roleId||roleForTask(remote,roles),
+    deleted:false,
+    ticktick:{id:remote.id,projectId:remote.projectId||'',etag:remote.etag||'',version:remoteVersion(remote),repeatFlag:remote.repeatFlag||'',lastSeenAt:new Date().toISOString()},
+    ticktickDirty:false,
+    ticktickMessage:'',
+    revision:(local.revision||0)+1,
+  };
+}
+
+function newFromRemote(remote:TickTask,roles:KompasRecord[]):KompasRecord{
+  return {
+    id:`ticktick-${remote.id}`,
+    kind:'task',
+    revision:1,
+    ...remoteFields(remote),
+    rank:1,
+    quadrant:'2',
+    roleId:roleForTask(remote,roles),
+    goalId:'',
+    bigRock:false,
+    sync:false,
+    deleted:false,
+    ticktick:{id:remote.id,projectId:remote.projectId||'',etag:remote.etag||'',version:remoteVersion(remote),repeatFlag:remote.repeatFlag||'',lastSeenAt:new Date().toISOString()},
+    ticktickDirty:false,
+    ticktickMessage:'',
+  };
+}
+
+function remotePayload(task:KompasRecord,projectId:string){
+  const payload:any={
+    id:task.ticktick?.id,
+    projectId,
+    title:task.title,
+    content:task.notes||'',
+    priority:priorityToTicktick(task.priority),
+    timeZone:bratislava,
+  };
+  if(task.date){
+    payload.isAllDay=!task.time;
+    const start=zonedInstant(task.date,task.time||'00:00');
+    payload.startDate=start;
+    if(task.time){
+      const due=new Date(Date.parse(start)+Math.max(5,Number(task.duration||60))*60000);
+      payload.dueDate=due.toISOString().replace(/\.\d{3}Z$/,'+0000');
+    }else payload.dueDate=start;
+  }
+  return payload;
+}
+
+async function openTasks(token:string){
+  const tasks=await requestWithToken(token,'/task/filter',{method:'POST',body:JSON.stringify({status:[0]})}) as TickTask[];
+  if(!Array.isArray(tasks))return [];
+  if(tasks.length>=200)throw new ApiError('TickTick vrátil limit 200 otvorených úloh. Synchronizácia bola zastavená, aby sa údaje nespracovali iba čiastočne.',409);
+  return tasks;
+}
+
+async function recentlyCompleted(token:string,lastSync?:string){
+  if(!lastSync)return [];
+  const parsed=Date.parse(lastSync);
+  const start=new Date(Math.max((Number.isFinite(parsed)?parsed:Date.now())-2*86400000,Date.now()-90*86400000));
+  const end=new Date(Date.now()+60000);
+  const tasks=await requestWithToken(token,'/task/completed',{method:'POST',body:JSON.stringify({startDate:start.toISOString(),endDate:end.toISOString()})}) as TickTask[];
+  return Array.isArray(tasks)?tasks:[];
+}
+
+export async function syncTicktick(owner:string){
+  const config=await readConfig(owner),token=await tokenFor(owner);
+  if(!await acquireSyncLock(owner))throw new ApiError('Iná synchronizácia už prebieha. Skús to o chvíľu.',409);
+  const stats={remote:0,matched:0,createdInKompas:0,createdInTicktick:0,updatedFromTicktick:0,updatedInTicktick:0,completedInTicktick:0,unresolved:0};
+  const errors:string[]=[];
+  try{
+    const projects=await ticktickProjectsWithToken(token);
+    const writable=projects.filter(project=>project.permission!=='read');
+    const preferred=writable.find(project=>project.id===config.ticktickProjectId)||writable.find(project=>project.name==='🧭 Týždeň & priority')||writable[0];
+    const all=await rows(owner) as KompasRecord[],localTasks=all.filter(record=>record.kind==='task'),roles=all.filter(record=>record.kind==='role');
+    const open=await openTasks(token),completed=await recentlyCompleted(token,config.ticktickLastSync);
+    const remoteMap=new Map<string,TickTask>();
+    for(const task of [...open,...completed])if(task?.id)remoteMap.set(task.id,task);
+    stats.remote=open.length;
+
+    const linked=new Map<string,KompasRecord>();
+    for(const task of localTasks)if(task.ticktick?.id)linked.set(task.ticktick.id,task);
+    const consumedRemote=new Set<string>();
+
+    for(const [remoteId,local] of linked){
+      const remote=remoteMap.get(remoteId);
+      if(!remote){
+        if(!local.ticktickMessage)await writeRecord(owner,{...local,ticktickMessage:'Úloha sa v TickTicku nenašla. V Kompase zostáva zachovaná.',ticktickDirty:false,revision:(local.revision||0)+1});
+        stats.unresolved++;
+        continue;
+      }
+      consumedRemote.add(remoteId);
+      const knownVersion=local.ticktick?.version||local.ticktick?.etag||'';
+      const remoteChanged=!knownVersion||knownVersion!==remoteVersion(remote);
+      if(remoteChanged||!local.ticktickDirty||remote.status===2||local.deleted){
+        const merged=mergedFromRemote(local,remote,roles);
+        const before=JSON.stringify(remoteFields(remote)),after=JSON.stringify({title:local.title,notes:local.notes||'',date:local.date||'',time:local.time||'',duration:Number(local.duration||60),priority:local.priority||'B',done:!!local.done});
+        if(before!==after||local.deleted)stats.updatedFromTicktick++;
+        await writeRecord(owner,merged);
+        continue;
+      }
+      try{
+        if(local.done){
+          await requestWithToken(token,`/project/${encodeURIComponent(local.ticktick.projectId)}/task/${encodeURIComponent(remoteId)}/complete`,{method:'POST'});
+          await writeRecord(owner,{...local,ticktickDirty:false,ticktickMessage:'',revision:(local.revision||0)+1});
+          stats.completedInTicktick++;
+        }else{
+          const updated=await requestWithToken(token,`/task/${encodeURIComponent(remoteId)}`,{method:'POST',body:JSON.stringify(remotePayload(local,local.ticktick.projectId))}) as TickTask;
+          await writeRecord(owner,mergedFromRemote(local,updated?.id?updated:{...remote,...remotePayload(local,local.ticktick.projectId)},roles));
+          stats.updatedInTicktick++;
+        }
+      }catch(error){errors.push(`${local.title}: ${(error as Error).message}`)}
+    }
+
+    const unlinked=localTasks.filter(task=>!task.ticktick?.id&&!task.deleted);
+    const remainingRemote=open.filter(task=>!consumedRemote.has(task.id));
+    const localByExact=new Map<string,KompasRecord[]>(),remoteByExact=new Map<string,TickTask[]>();
+    const localByTitle=new Map<string,KompasRecord[]>(),remoteByTitle=new Map<string,TickTask[]>();
+    for(const task of unlinked){
+      const exact=matchKey(task.title,task.date||'',task.time||''),title=titleKey(task.title);
+      localByExact.set(exact,[...(localByExact.get(exact)||[]),task]);localByTitle.set(title,[...(localByTitle.get(title)||[]),task]);
+    }
+    for(const task of remainingRemote){
+      const fields=remoteFields(task),exact=matchKey(fields.title,fields.date,fields.time),title=titleKey(fields.title);
+      remoteByExact.set(exact,[...(remoteByExact.get(exact)||[]),task]);remoteByTitle.set(title,[...(remoteByTitle.get(title)||[]),task]);
+    }
+    const matchedLocal=new Set<string>(),matchedRemote=new Set<string>(),pairs=new Map<string,KompasRecord>();
+    const pair=(local:KompasRecord,remote:TickTask)=>{matchedLocal.add(local.id);matchedRemote.add(remote.id);pairs.set(remote.id,local)};
+    for(const [key,locals] of localByExact){const remotes=remoteByExact.get(key)||[];if(locals.length===1&&remotes.length===1)pair(locals[0],remotes[0])}
+    for(const [key,locals] of localByTitle){
+      const availableLocals=locals.filter(task=>!matchedLocal.has(task.id)),availableRemotes=(remoteByTitle.get(key)||[]).filter(task=>!matchedRemote.has(task.id));
+      if(availableLocals.length===1&&availableRemotes.length===1)pair(availableLocals[0],availableRemotes[0]);
+    }
+    for(const remote of remainingRemote){
+      if(matchedRemote.has(remote.id)){
+        const local=pairs.get(remote.id);
+        if(local){await writeRecord(owner,mergedFromRemote(local,remote,roles));stats.matched++;continue}
+      }
+      const sameTitle=unlinked.some(task=>!matchedLocal.has(task.id)&&titleKey(task.title)===titleKey(remoteFields(remote).title));
+      if(!config.ticktickInitialized&&sameTitle){stats.unresolved++;continue}
+      await writeRecord(owner,newFromRemote(remote,roles));stats.createdInKompas++;
+    }
+
+    if(!config.ticktickInitialized){
+      for(const local of unlinked.filter(task=>!matchedLocal.has(task.id)&&remainingRemote.some(remote=>titleKey(remoteFields(remote).title)===titleKey(task.title)))){
+        await writeRecord(owner,{...local,ticktickDirty:false,ticktickMessage:'Názov sa v TickTicku našiel viackrát alebo s nejasným termínom. Úloha nebola automaticky spárovaná.',revision:(local.revision||0)+1});
+      }
+    }
+
+    if(config.ticktickInitialized&&preferred){
+      for(const local of unlinked.filter(task=>!matchedLocal.has(task.id)&&task.ticktickDirty&&!task.done)){
+        try{
+          const created=await requestWithToken(token,'/task',{method:'POST',body:JSON.stringify(remotePayload(local,preferred.id))}) as TickTask;
+          if(!created?.id)throw new Error('TickTick nevrátil identifikátor novej úlohy.');
+          await writeRecord(owner,mergedFromRemote(local,created,roles));stats.createdInTicktick++;
+        }catch(error){errors.push(`${local.title}: ${(error as Error).message}`)}
+      }
+    }
+
+    const latest=await readConfig(owner),lastSync=new Date().toISOString();
+    await saveConfig(owner,{...latest,ticktickProjectId:latest.ticktickProjectId||preferred?.id||'',ticktickInitialized:true,ticktickLastSync:lastSync});
+    return {stats,errors,lastSync,projectId:latest.ticktickProjectId||preferred?.id||''};
+  }finally{await releaseSyncLock(owner)}
+}

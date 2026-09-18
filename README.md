@@ -10,6 +10,7 @@ z knihy *7 návykov skutočne efektívnych ľudí*.
 - roly, ciele, hodnoty a osobné poslanie,
 - denník a týždenná reflexia,
 - trvalé uloženie cez Netlify Blobs,
+- synchronizácia úloh s TickTickom, kde má TickTick pri konflikte prednosť,
 - obojsmerná synchronizácia úloh s Google Calendar.
 
 ## Lokálny vývoj
@@ -27,6 +28,15 @@ Pri lokálnom vývoji sa dáta ukladajú do ignorovaného súboru
 V Google Cloud Console je potrebné vytvoriť OAuth klienta typu Web application,
 zapnúť Google Calendar API a ako presmerovanie použiť adresu zobrazenú v
 Nastaveniach aplikácie. Client ID a Client Secret sa ukladajú na serveri.
+
+## TickTick
+
+V TickTicku sa v `Settings → Account → API Token` vytvorí osobný API token a
+vloží sa v Nastaveniach Kompasu. Pri prvom spojení Kompas bezpečne páruje
+existujúce úlohy podľa názvu, dátumu a času. Potom synchronizuje pri otvorení,
+každú minútu počas používania a ručne. Pri súbežnej úprave tej istej úlohy má
+prednosť verzia z TickTicku; roly, ciele, kvadranty a veľké kamene zostávajú v
+Kompase.
 
 ## Nasadenie
 
