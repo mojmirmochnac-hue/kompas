@@ -104,7 +104,7 @@ function remoteFields(task:TickTask){
     time:start.time,
     duration,
     priority:priorityFromTicktick(task.priority),
-    done:task.status===2||!!task.completedTime,
+    done:task.status===2,
   };
 }
 
@@ -191,7 +191,7 @@ async function openTasks(token:string){
   const tasks=await requestWithToken(token,'/task/filter',{method:'POST',body:JSON.stringify({status:[0]})}) as TickTask[];
   if(!Array.isArray(tasks))return [];
   if(tasks.length>=200)throw new ApiError('TickTick vrátil limit 200 otvorených úloh. Synchronizácia bola zastavená, aby sa údaje nespracovali iba čiastočne.',409);
-  return tasks;
+  return tasks.map(task=>({...task,status:0}));
 }
 
 async function recentlyCompleted(token:string,lastSync?:string){
@@ -200,7 +200,7 @@ async function recentlyCompleted(token:string,lastSync?:string){
   const start=new Date(Math.max((Number.isFinite(parsed)?parsed:Date.now())-2*86400000,Date.now()-90*86400000));
   const end=new Date(Date.now()+60000);
   const tasks=await requestWithToken(token,'/task/completed',{method:'POST',body:JSON.stringify({startDate:start.toISOString(),endDate:end.toISOString()})}) as TickTask[];
-  return Array.isArray(tasks)?tasks:[];
+  return Array.isArray(tasks)?tasks.map(task=>({...task,status:2})):[];
 }
 
 export async function syncTicktick(owner:string){
