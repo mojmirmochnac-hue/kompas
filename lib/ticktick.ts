@@ -34,16 +34,29 @@ async function requestWithToken(token:string,path:string,options:RequestInit={})
   let body:any=null;
   if(text){try{body=JSON.parse(text)}catch{body=text}}
   if(!response.ok){
-    if(response.status===401||response.status===403)throw new ApiError('TickTick prístup nie je platný. Vytvor nový osobný API token.',401);
+    if(response.status===401||response.status===403)throw new ApiError('TickTick pripojenie vypršalo alebo bolo odobraté. Pripoj účet znova.',401);
     throw new ApiError(`TickTick požiadavka zlyhala (${response.status}).`,502);
   }
   return body;
 }
 
 async function tokenFor(owner:string){
-  const config=await readConfig(owner);
-  if(!config.ticktickToken)throw new ApiError('Najprv pripoj TickTick v nastaveniach.',400);
-  return String(config.ticktickToken);
+  let config=await readConfig(owner);
+  if(config.ticktickAccessToken&&(!config.ticktickTokenExpiry||config.ticktickTokenExpiry>Date.now()+60000))return String(config.ticktickAccessToken);
+  if(config.ticktickRefreshToken&&config.ticktickClientId){
+    const form=new URLSearchParams({grant_type:'refresh_token',refresh_token:String(config.ticktickRefreshToken),client_id:String(config.ticktickClientId)});
+    const headers:Record<string,string>={'Content-Type':'application/x-www-form-urlencoded'};
+    if(config.ticktickClientSecret)headers.Authorization='Basic '+Buffer.from(`${config.ticktickClientId}:${config.ticktickClientSecret}`).toString('base64');
+    const response=await fetch('https://api.ticktick.com/oauth/token',{method:'POST',headers,body:form});
+    const token:any=await response.json().catch(()=>null);
+    if(response.ok&&token?.access_token){
+      config={...config,ticktickAccessToken:token.access_token,ticktickRefreshToken:token.refresh_token||config.ticktickRefreshToken,ticktickTokenExpiry:Date.now()+Number(token.expires_in||3600)*1000};
+      await saveConfig(owner,config);
+      return String(token.access_token);
+    }
+  }
+  if(config.ticktickToken)return String(config.ticktickToken);
+  throw new ApiError('Najprv pripoj TickTick v nastaveniach.',400);
 }
 
 export async function ticktickProjectsWithToken(token:string){
@@ -53,10 +66,6 @@ export async function ticktickProjectsWithToken(token:string){
 
 export async function ticktickProjects(owner:string){
   return ticktickProjectsWithToken(await tokenFor(owner));
-}
-
-export async function validateTicktickToken(token:string){
-  return ticktickProjectsWithToken(token);
 }
 
 function normalize(value:unknown){

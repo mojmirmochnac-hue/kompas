@@ -31,12 +31,13 @@ Nastaveniach aplikácie. Client ID a Client Secret sa ukladajú na serveri.
 
 ## TickTick
 
-V TickTicku sa v `Settings → Account → API Token` vytvorí osobný API token a
-vloží sa v Nastaveniach Kompasu. Pri prvom spojení Kompas bezpečne páruje
-existujúce úlohy podľa názvu, dátumu a času. Potom synchronizuje pri otvorení,
-každú minútu počas používania a ručne. Pri súbežnej úprave tej istej úlohy má
-prednosť verzia z TickTicku; roly, ciele, kvadranty a veľké kamene zostávajú v
-Kompase.
+V Nastaveniach Kompasu sa TickTick pripája cez oficiálny MCP server a OAuth.
+Používateľ nevkladá API token ani heslo: prihlási sa priamo na stránke TickTicku
+a povolí oprávnenia `tasks:read` a `tasks:write`. Pri prvom spojení Kompas
+bezpečne páruje existujúce úlohy podľa názvu, dátumu a času. Potom synchronizuje
+pri otvorení, každú minútu počas používania a ručne. Pri súbežnej úprave tej
+istej úlohy má prednosť verzia z TickTicku; roly, ciele, kvadranty a veľké
+kamene zostávajú v Kompase.
 
 ## Nasadenie
 
