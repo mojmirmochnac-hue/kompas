@@ -12,8 +12,12 @@ export async function POST(req:Request){try{
     if(data.date&&!/^\d{4}-\d{2}-\d{2}$/.test(data.date))return json({error:'Neplatný dátum.'},400);
     if(data.time&&!/^([01]\d|2[0-3]):[0-5]\d$/.test(data.time))return json({error:'Neplatný čas.'},400);
     if(data.sync&&(!data.date||!data.time))return json({error:'Pre Google kalendár vyplň dátum aj čas.'},400);
-    if(data.duration&&(!Number.isFinite(+data.duration)||+data.duration<5||+data.duration>1440))return json({error:'Trvanie musí byť 5 až 1 440 minút.'},400);
+    if(data.duration===undefined)data.duration=60;
+    if(data.duration===''||!Number.isInteger(Number(data.duration))||Number(data.duration)<5||Number(data.duration)>1440)return json({error:'Trvanie musí byť 5 až 1 440 minút.'},400);
+    if(data.rank===undefined)data.rank=1;
+    if(data.rank===''||!Number.isInteger(Number(data.rank))||Number(data.rank)<1||Number(data.rank)>99)return json({error:'Poradie musí byť 1 až 99.'},400);
   }
+  if(kind==='value'&&data.rank!==undefined&&(data.rank===''||!Number.isInteger(Number(data.rank))||Number(data.rank)<1))return json({error:'Poradie hodnoty musí byť kladné celé číslo.'},400);
   const old=await readRecord(o,id);
   if(old){
     if(old.revision!==revision)return json({error:'Záznam sa zmenil v inom okne. Obnov údaje a zopakuj úpravu.'},409);
