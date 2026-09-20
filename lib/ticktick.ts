@@ -1,4 +1,5 @@
 import {ApiError,acquireSyncLock,readConfig,releaseSyncLock,rows,saveConfig,writeRecord} from './store';
+import {splitTicktickNote,withPlanningDetails} from './ticktick-notes';
 
 type TickTask={
   id:string;
@@ -99,12 +100,27 @@ function remoteFields(task:TickTask){
   const duration=Number.isFinite(startMs)&&Number.isFinite(dueMs)&&dueMs>startMs?Math.max(5,Math.round((dueMs-startMs)/60000)):60;
   return {
     title:String(task.title||'Bez názvu'),
-    notes:String(task.content||task.desc||''),
+    notes:splitTicktickNote(String(task.content||task.desc||'')).notes,
     date:start.date,
     time:start.time,
     duration,
     priority:priorityFromTicktick(task.priority),
     done:task.status===2,
+  };
+}
+
+function planningFromRemote(remote:TickTask,roles:KompasRecord[],goals:KompasRecord[]){
+  const {fields,hasPlanningBlock}=splitTicktickNote(String(remote.content||remote.desc||''));
+  if(!hasPlanningBlock)return {};
+  const quadrant=fields['Kvadrant']?.match(/^(I{1,3}|IV)\b/)?.[1];
+  const role=roles.find(item=>item.title===fields['Rola']);
+  const goal=goals.find(item=>item.title===fields['Cieľ']);
+  return {
+    ...(!fields['Rola']||role?{roleId:role?.id||''}:{}),
+    ...(!fields['Cieľ']||goal?{goalId:goal?.id||''}:{}),
+    ...(quadrant?{quadrant:String({I:1,II:2,III:3,IV:4}[quadrant]||2)}:{}),
+    ...(fields['Veľký kameň']?{bigRock:fields['Veľký kameň']==='Áno'}:{}),
+    ...(fields['Poradie']&&Number(fields['Poradie'])>0?{rank:Number(fields['Poradie'])}:{}),
   };
 }
 
@@ -133,12 +149,13 @@ function remoteVersion(task:TickTask){
   });
 }
 
-function mergedFromRemote(local:KompasRecord,remote:TickTask,roles:KompasRecord[]){
+function mergedFromRemote(local:KompasRecord,remote:TickTask,roles:KompasRecord[],goals:KompasRecord[]){
   const remoteData=remoteFields(remote);
   return {
     ...local,
     ...remoteData,
     roleId:local.roleId||roleForTask(remote,roles),
+    ...planningFromRemote(remote,roles,goals),
     deleted:false,
     ticktick:{id:remote.id,projectId:remote.projectId||'',etag:remote.etag||'',version:remoteVersion(remote),repeatFlag:remote.repeatFlag||'',lastSeenAt:new Date().toISOString()},
     ticktickDirty:false,
@@ -147,7 +164,7 @@ function mergedFromRemote(local:KompasRecord,remote:TickTask,roles:KompasRecord[
   };
 }
 
-function newFromRemote(remote:TickTask,roles:KompasRecord[]):KompasRecord{
+function newFromRemote(remote:TickTask,roles:KompasRecord[],goals:KompasRecord[]):KompasRecord{
   return {
     id:`ticktick-${remote.id}`,
     kind:'task',
@@ -158,6 +175,7 @@ function newFromRemote(remote:TickTask,roles:KompasRecord[]):KompasRecord{
     roleId:roleForTask(remote,roles),
     goalId:'',
     bigRock:false,
+    ...planningFromRemote(remote,roles,goals),
     sync:false,
     deleted:false,
     ticktick:{id:remote.id,projectId:remote.projectId||'',etag:remote.etag||'',version:remoteVersion(remote),repeatFlag:remote.repeatFlag||'',lastSeenAt:new Date().toISOString()},
@@ -166,12 +184,18 @@ function newFromRemote(remote:TickTask,roles:KompasRecord[]):KompasRecord{
   };
 }
 
-function remotePayload(task:KompasRecord,projectId:string){
+function remotePayload(task:KompasRecord,projectId:string,roles:KompasRecord[],goals:KompasRecord[]){
   const payload:any={
     id:task.ticktick?.id,
     projectId,
     title:task.title,
-    content:task.notes||'',
+    content:withPlanningDetails(task.notes||'',{
+      role:roles.find(role=>role.id===task.roleId)?.title,
+      goal:goals.find(goal=>goal.id===task.goalId)?.title,
+      quadrant:({1:'I · dôležité, naliehavé',2:'II · dôležité, nenaliehavé',3:'III · nedôležité, naliehavé',4:'IV · nedôležité, nenaliehavé'} as Record<string,string>)[task.quadrant||'2'],
+      bigRock:!!task.bigRock,
+      rank:Number(task.rank||1),
+    }),
     priority:priorityToTicktick(task.priority),
     timeZone:bratislava,
   };
@@ -212,7 +236,7 @@ export async function syncTicktick(owner:string){
     const projects=await ticktickProjectsWithToken(token);
     const writable=projects.filter(project=>project.permission!=='read');
     const preferred=writable.find(project=>project.id===config.ticktickProjectId)||writable.find(project=>project.name==='🧭 Týždeň & priority')||writable[0];
-    const all=await rows(owner) as KompasRecord[],localTasks=all.filter(record=>record.kind==='task'),roles=all.filter(record=>record.kind==='role');
+    const all=await rows(owner) as KompasRecord[],localTasks=all.filter(record=>record.kind==='task'),roles=all.filter(record=>record.kind==='role'&&!record.deleted),goals=all.filter(record=>record.kind==='goal'&&!record.deleted);
     const open=await openTasks(token),completed=await recentlyCompleted(token,config.ticktickLastSync);
     const remoteMap=new Map<string,TickTask>();
     for(const task of [...open,...completed])if(task?.id)remoteMap.set(task.id,task);
@@ -233,20 +257,22 @@ export async function syncTicktick(owner:string){
       const knownVersion=local.ticktick?.version||local.ticktick?.etag||'';
       const remoteChanged=!knownVersion||knownVersion!==remoteVersion(remote);
       if(remoteChanged||!local.ticktickDirty||remote.status===2||local.deleted){
-        const merged=mergedFromRemote(local,remote,roles);
+        const merged=mergedFromRemote(local,remote,roles,goals);
         const before=JSON.stringify(remoteFields(remote)),after=JSON.stringify({title:local.title,notes:local.notes||'',date:local.date||'',time:local.time||'',duration:Number(local.duration||60),priority:local.priority||'B',done:!!local.done});
         if(before!==after||local.deleted)stats.updatedFromTicktick++;
         await writeRecord(owner,merged);
         continue;
       }
       try{
+        const payload=remotePayload(local,local.ticktick.projectId,roles,goals);
+        const updated=await requestWithToken(token,`/task/${encodeURIComponent(remoteId)}`,{method:'POST',body:JSON.stringify(payload)}) as TickTask;
+        const merged=mergedFromRemote(local,{...remote,...payload,...updated},roles,goals);
         if(local.done){
           await requestWithToken(token,`/project/${encodeURIComponent(local.ticktick.projectId)}/task/${encodeURIComponent(remoteId)}/complete`,{method:'POST'});
-          await writeRecord(owner,{...local,ticktickDirty:false,ticktickMessage:'',revision:(local.revision||0)+1});
+          await writeRecord(owner,{...merged,done:true,ticktick:{...merged.ticktick,version:''}});
           stats.completedInTicktick++;
         }else{
-          const updated=await requestWithToken(token,`/task/${encodeURIComponent(remoteId)}`,{method:'POST',body:JSON.stringify(remotePayload(local,local.ticktick.projectId))}) as TickTask;
-          await writeRecord(owner,mergedFromRemote(local,updated?.id?updated:{...remote,...remotePayload(local,local.ticktick.projectId)},roles));
+          await writeRecord(owner,merged);
           stats.updatedInTicktick++;
         }
       }catch(error){errors.push(`${local.title}: ${(error as Error).message}`)}
@@ -274,11 +300,11 @@ export async function syncTicktick(owner:string){
     for(const remote of remainingRemote){
       if(matchedRemote.has(remote.id)){
         const local=pairs.get(remote.id);
-        if(local){await writeRecord(owner,mergedFromRemote(local,remote,roles));stats.matched++;continue}
+        if(local){await writeRecord(owner,mergedFromRemote(local,remote,roles,goals));stats.matched++;continue}
       }
       const sameTitle=unlinked.some(task=>!matchedLocal.has(task.id)&&titleKey(task.title)===titleKey(remoteFields(remote).title));
       if(!config.ticktickInitialized&&sameTitle){stats.unresolved++;continue}
-      await writeRecord(owner,newFromRemote(remote,roles));stats.createdInKompas++;
+      await writeRecord(owner,newFromRemote(remote,roles,goals));stats.createdInKompas++;
     }
 
     if(!config.ticktickInitialized){
@@ -290,9 +316,10 @@ export async function syncTicktick(owner:string){
     if(config.ticktickInitialized&&preferred){
       for(const local of unlinked.filter(task=>!matchedLocal.has(task.id)&&task.ticktickDirty&&!task.done)){
         try{
-          const created=await requestWithToken(token,'/task',{method:'POST',body:JSON.stringify(remotePayload(local,preferred.id))}) as TickTask;
+          const payload=remotePayload(local,preferred.id,roles,goals);
+          const created=await requestWithToken(token,'/task',{method:'POST',body:JSON.stringify(payload)}) as TickTask;
           if(!created?.id)throw new Error('TickTick nevrátil identifikátor novej úlohy.');
-          await writeRecord(owner,mergedFromRemote(local,created,roles));stats.createdInTicktick++;
+          await writeRecord(owner,mergedFromRemote(local,{...payload,...created},roles,goals));stats.createdInTicktick++;
         }catch(error){errors.push(`${local.title}: ${(error as Error).message}`)}
       }
     }

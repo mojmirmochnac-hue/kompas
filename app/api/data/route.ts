@@ -23,7 +23,7 @@ export async function POST(req:Request){try{
     if(kind==='task'){
       if(oldData.ticktick)data.ticktick=oldData.ticktick;
       if(oldData.ticktickMessage)data.ticktickMessage=oldData.ticktickMessage;
-      const shared=['title','notes','date','time','duration','priority','done','deleted'];
+      const shared=['title','notes','date','time','duration','priority','done','deleted','roleId','goalId','quadrant','bigRock','rank'];
       const changed=shared.some(field=>oldData[field]!==data[field]);
       data.ticktickDirty=changed||!!oldData.ticktickDirty;
     }
@@ -32,5 +32,10 @@ export async function POST(req:Request){try{
     if(kind==='task')data.ticktickDirty=true;
   }
   const record={...data,id,kind,revision:revision+1};
-  await writeRecord(o,record);return json({record});
+  await writeRecord(o,record);
+  if((kind==='role'||kind==='goal')&&old){
+    const tasks=(await rows(o)).filter(task=>task.kind==='task'&&!task.deleted&&(kind==='role'?task.roleId===id:task.goalId===id));
+    for(const task of tasks)await writeRecord(o,{...task,ticktickDirty:true,revision:(task.revision||0)+1});
+  }
+  return json({record});
 }catch(e){console.error('Data save failed');return json({error:(e as Error).message},errorStatus(e))}}
