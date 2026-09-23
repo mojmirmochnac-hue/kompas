@@ -184,7 +184,17 @@ function newFromRemote(remote:TickTask,roles:KompasRecord[],goals:KompasRecord[]
   };
 }
 
-function remotePayload(task:KompasRecord,projectId:string,roles:KompasRecord[],goals:KompasRecord[]){
+function roleTags(task:KompasRecord,remote:TickTask|undefined,roles:KompasRecord[]){
+  const previousRole=splitTicktickNote(String(remote?.content||remote?.desc||'')).fields['Rola'];
+  const taggedRole=remote?roles.find(role=>role.id===roleForTask(remote,roles))?.title:'';
+  const previousRoleNames=new Set([normalize(previousRole),normalize(taggedRole)].filter(Boolean));
+  const tags=(remote?.tags||[]).filter(tag=>!previousRoleNames.has(normalize(tag)));
+  const selected=roles.find(role=>role.id===task.roleId)?.title?.trim();
+  if(selected&&!tags.some(tag=>normalize(tag)===normalize(selected)))tags.push(selected);
+  return tags;
+}
+
+function remotePayload(task:KompasRecord,projectId:string,roles:KompasRecord[],goals:KompasRecord[],remote?:TickTask){
   const payload:any={
     id:task.ticktick?.id,
     projectId,
@@ -199,6 +209,8 @@ function remotePayload(task:KompasRecord,projectId:string,roles:KompasRecord[],g
     priority:priorityToTicktick(task.priority),
     timeZone:bratislava,
   };
+  const tags=roleTags(task,remote,roles);
+  if(tags.length||remote?.tags?.length||task.roleId)payload.tags=tags;
   if(task.date){
     payload.isAllDay=!task.time;
     const start=zonedInstant(task.date,task.time||'00:00');
@@ -230,7 +242,7 @@ async function recentlyCompleted(token:string,lastSync?:string){
 export async function syncTicktick(owner:string){
   const config=await readConfig(owner),token=await tokenFor(owner);
   if(!await acquireSyncLock(owner))throw new ApiError('Iná synchronizácia už prebieha. Skús to o chvíľu.',409);
-  const stats={remote:0,matched:0,createdInKompas:0,createdInTicktick:0,updatedFromTicktick:0,updatedInTicktick:0,completedInTicktick:0,unresolved:0};
+  const stats={remote:0,matched:0,createdInKompas:0,createdInTicktick:0,updatedFromTicktick:0,updatedInTicktick:0,completedInTicktick:0,deletedInTicktick:0,unresolved:0};
   const errors:string[]=[];
   try{
     const projects=await ticktickProjectsWithToken(token);
@@ -248,6 +260,16 @@ export async function syncTicktick(owner:string){
 
     for(const [remoteId,local] of linked){
       const remote=remoteMap.get(remoteId);
+      if(local.deleted){
+        if(remote){
+          try{
+            await requestWithToken(token,`/project/${encodeURIComponent(local.ticktick.projectId)}/task/${encodeURIComponent(remoteId)}`,{method:'DELETE'});
+            await writeRecord(owner,{...local,ticktickDirty:false,ticktickMessage:'',revision:(local.revision||0)+1});
+            stats.deletedInTicktick++;
+          }catch(error){errors.push(`${local.title}: ${(error as Error).message}`)}
+        }else if(local.ticktickDirty)await writeRecord(owner,{...local,ticktickDirty:false,ticktickMessage:'',revision:(local.revision||0)+1});
+        continue;
+      }
       if(!remote){
         if(!local.ticktickMessage)await writeRecord(owner,{...local,ticktickMessage:'Úloha sa v TickTicku nenašla. V Kompase zostáva zachovaná.',ticktickDirty:false,revision:(local.revision||0)+1});
         stats.unresolved++;
@@ -256,7 +278,7 @@ export async function syncTicktick(owner:string){
       consumedRemote.add(remoteId);
       const knownVersion=local.ticktick?.version||local.ticktick?.etag||'';
       const remoteChanged=!knownVersion||knownVersion!==remoteVersion(remote);
-      if(remoteChanged||!local.ticktickDirty||remote.status===2||local.deleted){
+      if(remoteChanged||!local.ticktickDirty||remote.status===2){
         const merged=mergedFromRemote(local,remote,roles,goals);
         const before=JSON.stringify(remoteFields(remote)),after=JSON.stringify({title:local.title,notes:local.notes||'',date:local.date||'',time:local.time||'',duration:Number(local.duration||60),priority:local.priority||'B',done:!!local.done});
         if(before!==after||local.deleted)stats.updatedFromTicktick++;
@@ -264,7 +286,7 @@ export async function syncTicktick(owner:string){
         continue;
       }
       try{
-        const payload=remotePayload(local,local.ticktick.projectId,roles,goals);
+        const payload=remotePayload(local,local.ticktick.projectId,roles,goals,remote);
         const updated=await requestWithToken(token,`/task/${encodeURIComponent(remoteId)}`,{method:'POST',body:JSON.stringify(payload)}) as TickTask;
         const merged=mergedFromRemote(local,{...remote,...payload,...updated},roles,goals);
         if(local.done){
