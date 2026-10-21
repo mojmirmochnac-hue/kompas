@@ -122,3 +122,5 @@ p,.muted,.page-heading p,.empty p,.footnote,.task-meta,.role-card p,.mini-compas
 .role-card footer .role-goal-link:hover{color:#234fa7}
 #goals-list{scroll-margin-top:24px}
 .goal-heading-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+.role-card>.inline-goals{display:block;margin-top:18px}.inline-goals .goals-grid{display:grid;grid-template-columns:1fr;gap:12px}.inline-goals .goal-card{padding:14px;min-width:0}.inline-goal-editor{margin-top:18px;min-width:0}.inline-goal-editor fieldset{border:0;padding:0;min-width:0}.inline-goal-editor h3{margin-bottom:12px}.inline-goal-editor .field{margin:12px 0}.inline-goal-editor .form-grid{grid-template-columns:1fr}.goal-step{border:1px solid #dce4ef;border-radius:8px;padding:12px;margin:12px 0}.period-filters{flex-wrap:wrap;align-items:end;margin-bottom:18px}.period-filters .field{margin:0}.role-card:has(.inline-goal-editor),.role-card:has(.goal-card){grid-column:1/-1}.role-card:has(.goal-card)>.inline-goals .goals-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))}.inline-goal-editor{max-width:760px}.role-card .inline-goal-editor p{min-height:0}
